@@ -5,11 +5,15 @@
 package frc.robot;
 
 import frc.robot.Constants.OperatorConstants;
-import frc.robot.subsystems.superstructure.ElevatorSubsystem;
+import frc.robot.subsystems.superstructure.Grabber;
+import frc.robot.subsystems.superstructure.Elevator;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.wpilibj2.command.button.Trigger;
+import edu.wpi.first.wpilibj.Joystick;
+import edu.wpi.first.wpilibj2.command.button.JoystickButton;
+import edu.wpi.first.wpilibj2.command.InstantCommand;
 
 /**
  * This class is where the bulk of the robot should be declared. Since Command-based is a
@@ -19,11 +23,21 @@ import edu.wpi.first.wpilibj2.command.button.Trigger;
  */
 public class RobotContainer {
   // Declare subsystem
-  private final ElevatorSubsystem m_elevatorSubsystem = new ElevatorSubsystem();
+  private final Elevator m_elevatorSubsystem = new Elevator();
+  private final Grabber m_Coral= new Grabber();
 
   // Replace with CommandPS4Controller or CommandJoystick if needed
   private final CommandXboxController m_driverController =
       new CommandXboxController(OperatorConstants.kDriverControllerPort);
+
+  private final Joystick buttonbox1 = new Joystick(0);  // Update port number as needed
+  private final Joystick buttonbox2 = new Joystick(1);  // Update port number as needed
+
+  // Preset positions for elevator
+  private static final double ELEVATOR_POSITION_GROUND = 0.0;
+  private static final double ELEVATOR_POSITION_LOW = 2.0;    // Adjust these values!
+  private static final double ELEVATOR_POSITION_MID = 4.0;    // Adjust these values!
+  private static final double ELEVATOR_POSITION_HIGH = 6.0;   // Adjust these values!
 
   /** The container for the robot. Contains subsystems, OI devices, and commands. */
   public RobotContainer() {
@@ -44,9 +58,25 @@ public class RobotContainer {
    * joysticks}.
    */
   private void configureButtonBindings() {
+    // Elevator position presets on buttonbox1
+    new JoystickButton(buttonbox1, 1)
+        .onTrue(new InstantCommand(() -> 
+            m_elevatorSubsystem.setPosition(ELEVATOR_POSITION_GROUND)));
+            
+    new JoystickButton(buttonbox1, 2)
+        .onTrue(new InstantCommand(() -> 
+            m_elevatorSubsystem.setPosition(ELEVATOR_POSITION_LOW)));
+            
+    new JoystickButton(buttonbox1, 3)
+        .onTrue(new InstantCommand(() -> 
+            m_elevatorSubsystem.setPosition(ELEVATOR_POSITION_MID)));
+            
+    new JoystickButton(buttonbox1, 4)
+        .onTrue(new InstantCommand(() -> 
+            m_elevatorSubsystem.setPosition(ELEVATOR_POSITION_HIGH)));
 
-    // Schedule `exampleMethodCommand` when the Xbox controller's B button is pressed,
-    // cancelling on release.
+    // You can add more button bindings here for buttonbox1 (buttons 5-8)
+    // and buttonbox2 (buttons 1-8)
   }
 
   /**
