@@ -1,6 +1,7 @@
 package frc.robot.subsystems.superstructure;
 
 import com.ctre.phoenix6.hardware.CANcoder;
+import com.fasterxml.jackson.databind.ser.std.StdKeySerializers.Default;
 import com.revrobotics.spark.*;
 import com.revrobotics.spark.SparkBase.PersistMode;
 import com.revrobotics.spark.SparkBase.ResetMode;
@@ -14,7 +15,12 @@ import edu.wpi.first.wpilibj.shuffleboard.*;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.networktables.GenericEntry;
 import java.util.Map;
+
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.controller.PIDController;
+import edu.wpi.first.math.controller.ProfiledPIDController;
+import edu.wpi.first.math.trajectory.TrapezoidProfile;
+import edu.wpi.first.wpilibj.DigitalInput;
 
 public class Grabber extends SubsystemBase {
     private final SparkMax rightIntake;
@@ -22,25 +28,33 @@ public class Grabber extends SubsystemBase {
     private final SparkMax rightangle;
     private final SparkMax leftangle;
     private final CANcoder grabberEncoder;
-    private static final double DEFAULT_KG = 0.0;
+    private static final double DEFAULT_KG = 0.00;
     private int startupCounter = 0;
     private int stallCounter = 0;
 
     // Shuffleboard entries
     private final ShuffleboardTab grabberTab = Shuffleboard.getTab("Grabber");
     private final GenericEntry upButton, downButton, upSpeed, downSpeed;
-    private final GenericEntry forwardButton, backwardButton, flatButton;
-    private final GenericEntry angleDisplay, kGTuner;
+    private final GenericEntry forwardButton, backwardButton;
+    private final GenericEntry angleDisplay;
     private final GenericEntry bothInButton, bothOutButton;
     private final GenericEntry upRPMStatus, downRPMStatus;
+    private final GenericEntry defaultButton, coralStationButton, reefButton;
 
     // private final ShuffleboardTab motorTab = Shuffleboard.getTab("Motor Controls");
 
-    private final PIDController pidController = new PIDController(
-        0.07,   // kP
-        0.035,  // kI - helps eliminate steady-state error UwU
-        0.007   // kD - reduces overshoot and oscillation ✨
-    );
+    private final ProfiledPIDController pidController;
+    private boolean positionControl = false;
+    private double targetPosition = 0.0;
+
+    // Add with other instance variables
+    private final TrapezoidProfile.Constraints constraints = 
+        new TrapezoidProfile.Constraints(
+            0.1,   // Max velocity in rotations per second
+            0.15    // Max acceleration in rotations per second squared
+        );
+
+    private final DigitalInput intakeLimitSwitch;
 
     public Grabber() {
         rightIntake = new SparkMax(28, MotorType.kBrushless);
@@ -84,24 +98,12 @@ public class Grabber extends SubsystemBase {
             .withSize(1, 1)
             .getEntry();
 
-        flatButton = grabberTab.add("Flat", false)
-            .withWidget("Toggle Button")
-            .withPosition(2, 4)
-            .withSize(1, 1)
-            .getEntry();
-
         angleDisplay = grabberTab.add("Current Angle", 0.0)
             .withWidget("Text View")
             .withPosition(2, 4)
             .withSize(1, 1)
             .getEntry();
 
-        kGTuner = grabberTab.add("Gravity Compensation", DEFAULT_KG)
-            .withWidget("Number Slider")
-            .withProperties(Map.of("min", 0.0, "max", 0.2))
-            .withPosition(3, 4)
-            .withSize(1, 1)
-            .getEntry();
 
         bothInButton = grabberTab.add("Both Motors In", false)
             .withWidget("Toggle Button")
@@ -129,6 +131,36 @@ public class Grabber extends SubsystemBase {
             .withSize(1, 1)
             .getEntry();
 
+        // Initialize PID controller
+        pidController = new ProfiledPIDController(
+            8.7,    // kP
+            0.003,    // kI 
+            0.005,    // kD
+            constraints  // Motion constraints
+        );
+        pidController.reset(grabberEncoder.getAbsolutePosition().getValueAsDouble());
+        pidController.setTolerance(0.0004);  // Degrees of acceptable error
+        pidController.setIZone(0.05);  
+        pidController.disableContinuousInput();
+        // Add position preset buttons
+        defaultButton = grabberTab.add("default", false)
+            .withWidget("Toggle Button")
+            .withPosition(0, 7)
+            .withSize(1, 1)
+            .getEntry();
+            
+        reefButton = grabberTab.add("reef", false)
+            .withWidget("Toggle Button")
+            .withPosition(1, 7)
+            .withSize(1, 1)
+            .getEntry();
+            
+        coralStationButton = grabberTab.add("coral station", false)
+            .withWidget("Toggle Button")
+            .withPosition(2, 7)
+            .withSize(1, 1)
+            .getEntry();
+
         configureNEO550(rightIntake);
         configureNEO550(leftIntake);
         configureNEO(leftangle);    // Configure leader first
@@ -145,32 +177,41 @@ public class Grabber extends SubsystemBase {
         rightangle.configure(followerConfig, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
         
         leftangle.getEncoder().setPosition(0.0);
+
+        // Initialize limit switch on DIO port 0 (change port as needed!)
+        intakeLimitSwitch = new DigitalInput(0);
     }
 
     @Override
     public void periodic() {
-        double kG = kGTuner.getDouble(DEFAULT_KG);
+        double baseKG = DEFAULT_KG;
+        double currentAngle = grabberEncoder.getAbsolutePosition().getValueAsDouble();
+        
+        // Calculate kG based on angle (now in volts)
+        double kG = (currentAngle <= 0) ? -baseKG * 12.0 : baseKG * 12.0;
     
-        if (forwardButton.getBoolean(false)) {
-            leftangle.set(0.01 );  // Only need to control leader
-            
-          
-            
+        // Check position buttons
+        if (defaultButton.getBoolean(false)) {
+            setPosition(0.0);  // Default position
+        } else if (reefButton.getBoolean(false)) {
+            setPosition(-0.1884);  // Reef position
+        } else if (coralStationButton.getBoolean(false)) {
+            setPosition(0.233689453125);  // Coral station position
+        }else if (forwardButton.getBoolean(false)) {
+            set(0.069);
         } else if (backwardButton.getBoolean(false)) {
-            leftangle.set(-0.01);
-            
-           
-            
-        } else if (flatButton.getBoolean(false)) {
-            leftangle.set(0.01 + kG);
-            
-            if (leftangle.getEncoder().getPosition() >= 1.71875) {
-                leftangle.set(kG);
-            }
-            
-        } else {
-            leftangle.set(kG * 0.5);
+            set(-0.069);
+        }else {
+                leftangle.setVoltage(kG); 
         }
+        
+
+
+        
+           
+
+        // Update angle display
+        angleDisplay.setDouble(currentAngle);
 
         // Get button states and speeds fow motow contwol OwO
         boolean upButtonState = upButton.getBoolean(false);
@@ -182,49 +223,18 @@ public class Grabber extends SubsystemBase {
         rightIntake.set(upButtonState ? upSpeedValue : 0);
         leftIntake.set(downButtonState ? downSpeedValue : 0);
 
-        // Update angle display with new ratio
-        double currentAngleDegrees = grabberEncoder.getAbsolutePosition().getValueAsDouble();  // Convert from rotations
-        angleDisplay.setDouble(currentAngleDegrees);
-
         // Handle synchronized motor control
-        if (bothInButton.getBoolean(false)) {
-            rightIntake.set(-0.3);    // Up motor forward
-            leftIntake.set(0.3); // Down motor reverse
+            if (bothInButton.getBoolean(false)) {
+                intake(0.3);
         } else if (bothOutButton.getBoolean(false)) {
-            double rightIntakeRPM = Math.abs(rightIntake.getEncoder().getVelocity());
-            double leftIntakeRPM = Math.abs(leftIntake.getEncoder().getVelocity());
-            
-            if (startupCounter < 10) {  // Startup delay
-                rightIntake.set(0.4);
-                leftIntake.set(-0.4);
-                startupCounter++;
-            } else if (rightIntakeRPM < 50 || leftIntakeRPM < 50) {
-                if (stallCounter < 50) {  // Wait ~0.5 seconds (25 * 20ms) before stopping
-                    stallCounter++;
-                    rightIntake.set(0.4);
-                    leftIntake.set(-0.4);
-                } else {
-                    rightIntake.set(0);
-                    leftIntake.set(0);
-                    bothOutButton.setBoolean(false);
-                    startupCounter = 0;
-                    stallCounter = 0;
-                }
-            } else {
-                stallCounter = 0;  // Reset stall counter if RPM is good
-                rightIntake.set(0.4);
-                leftIntake.set(-0.4);
-            }
-        } else {
-            startupCounter = 0;  // Reset both counters when button released
-            stallCounter = 0;
+            placeCoral(0.3);
         }
 
         // Check RPM and update status
         double rightIntakeRPM = Math.abs(rightIntake.getEncoder().getVelocity());
         double leftIntakeRPM = Math.abs(leftIntake.getEncoder().getVelocity());
         
-        SmartDashboard.putNumber("rpm", rightIntake.getEncoder().getVelocity());
+        SmartDashboard.putNumber("pid", pidController.calculate(grabberEncoder.getAbsolutePosition().getValueAsDouble()));
     }
 
     // Copy your configuration methods
@@ -232,10 +242,10 @@ public class Grabber extends SubsystemBase {
         SparkMaxConfig neo550Config = new SparkMaxConfig();
     
         neo550Config
-            .smartCurrentLimit(40)  // Protect our smol motors! >w<
-            .idleMode(IdleMode.kCoast)  // Better control!
-            .voltageCompensation(12.0)  // Stable performance! UwU
-            .openLoopRampRate(0.1);     // Smooth acceleration! 
+            .smartCurrentLimit(20)  
+            .idleMode(IdleMode.kCoast)  
+            .voltageCompensation(12.0)  
+            .openLoopRampRate(0.1);     
     
         // Apply our configuration with proper timeout
         motor.setCANTimeout(250);
@@ -254,14 +264,77 @@ public class Grabber extends SubsystemBase {
             .reverseSoftLimitEnabled(false);
     
         neoConfig
-            .smartCurrentLimit(40)
+            .smartCurrentLimit(30)
             .idleMode(IdleMode.kBrake)
             .voltageCompensation(12.0)
-            .openLoopRampRate(0.1)
+            // .openLoopRampRate(0.1)
             .apply(softLimitConfig)
-            .inverted(false);   // Flips motor direction
+            .inverted(false);   
     
         motor.setCANTimeout(250);
         motor.configure(neoConfig, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
+    }
+
+    /**
+     * Sets the target position for the grabber
+     * @param position Target angle in degrees
+     * @return true if position is within valid range
+     */
+    public void setPosition(double position) {
+        // pidController.reset(grabberEncoder.getAbsolutePosition().getValueAsDouble());
+        pidController.setGoal(position);
+        set(MathUtil.clamp(pidController.calculate(grabberEncoder.getAbsolutePosition().getValueAsDouble()), -0.08, 0.08));
+    }
+
+    /**
+     * Sets the angle motor output based on voltage
+     * clamped between -1 ~ 1
+     * @param output Target voltage percentage 
+     */
+    public void set(double output) {
+        // double baseKG = DEFAULT_KG;
+        double currentAngle = grabberEncoder.getAbsolutePosition().getValueAsDouble();
+        double kG = calculateKG(currentAngle);
+        // double kG = (currentAngle <= 0) ? -baseKG * 12.0 : baseKG * 12.0;
+        leftangle.setVoltage((MathUtil.clamp(output, -1, 1) * 12) + kG);
+    }
+
+    public double calculateKG(double position) {
+        double kG = Math.cos((position - 0.2) * 15.5) * 0.01 + 0.01;
+        return kG;
+    }
+    
+    /**
+     * @return true if grabber is at the target position
+     */
+    public boolean atPosition() {
+        return pidController.atSetpoint();
+    }
+    
+    /**
+     * @return current angle of the grabber in degrees
+     */
+    public double getCurrentAngle() {
+        return grabberEncoder.getAbsolutePosition().getValueAsDouble();
+    }
+
+    public void intake(double speed) {
+        if (intakeLimitSwitch.get()) {
+            rightIntake.set(0);
+            leftIntake.set(0);
+            return;
+        }
+        
+        rightIntake.set(speed);
+        leftIntake.set(-speed);
+    }
+
+    public boolean isIntakeStopped() {
+        return intakeLimitSwitch.get();
+    }
+
+    public void placeCoral(double speed) {
+        rightIntake.set(-speed);
+        leftIntake.set(speed);
     }
 } 

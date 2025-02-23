@@ -22,6 +22,8 @@ import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.networktables.StringPublisher;
 import edu.wpi.first.wpilibj.shuffleboard.Shuffleboard;
 import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
+import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.controller.ArmFeedforward;
 import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
 import com.ctre.phoenix6.configs.CANcoderConfiguration;
@@ -34,20 +36,20 @@ public class Elevator extends SubsystemBase {
   private final SparkMax leftMotor;
   private final SparkMax rightMotor;
   
-  private static final double kG = 0.0;  // Voltage needed to fight gravity
-  private static final double kDownSpeedMultiplier = 0.75; // Reduces down speed - adjust this!
+  private static final double kG = 0.01;  // Voltage needed to overcome gravity
+  private static final double kDownSpeedMultiplier = 0.75; // Reduces speed when decending
 
   // Shuffleboard entries
   private final ShuffleboardTab elevatorTab = Shuffleboard.getTab("Elevator");
   private final GenericEntry upButton = elevatorTab.add("Elevator Up", false)
       .withWidget("Toggle Button")
-      .withPosition(0, 0)
+      .withPosition(0, 3)
       .withSize(1, 1)
       .getEntry();
       
   private final GenericEntry downButton = elevatorTab.add("Elevator Down", false)
       .withWidget("Toggle Button")
-      .withPosition(1, 0)
+      .withPosition(1, 2)
       .withSize(1, 1)
       .getEntry();
 
@@ -66,17 +68,18 @@ public class Elevator extends SubsystemBase {
   // Profiled PID Controller for smooth motionS
   private final TrapezoidProfile.Constraints constraints = 
       new TrapezoidProfile.Constraints(
-          3.0,   // Max velocity in rotations per second
-          2.0   // Max acceleration in rotations per second squared
+          0.3,   
+          0.75  
       );
   
   private final ProfiledPIDController pidController = 
       new ProfiledPIDController(
-          0.5,   // P gain
-          0.00,   // I gain
-          0.0,   // D gain
+          0.05,   // P gain
+          0.0,   // I gain
+          0.2,   // D gain
           constraints
       );
+  
 
   private double targetPosition = 0.0;
   private final GenericEntry setPositionEntry;
@@ -88,7 +91,7 @@ public class Elevator extends SubsystemBase {
   private final GenericEntry appliedOutputEntry;
   private final GenericEntry currentEntry;
 
-  /** Creates a new ElevatorSubsystem. */
+  /** Creates a new Elevator. */
   public Elevator() {
     leftMotor = new SparkMax(25, MotorType.kBrushless);  // Update ID as needed
     rightMotor = new SparkMax(26, MotorType.kBrushless); // Update ID as needed
@@ -96,7 +99,11 @@ public class Elevator extends SubsystemBase {
     
     configureNEO(leftMotor, false,true);  //master ccw positive
     configureNEO(rightMotor, true,true);  //slave cw positive
-  
+    
+    
+    // Configure PID Controller
+    pidController.setTolerance(0.05); 
+    pidController.setIntegratorRange(0, 0); //disables integral windup for testing
 
     //widgets
     speedEntry = elevatorTab.add("Elevator Speed", 0.0)
@@ -108,25 +115,25 @@ public class Elevator extends SubsystemBase {
         .withSize(2, 1)
         .getEntry();
     leftRotationsEntry = elevatorTab.add("Left Motor Rotations", 0.0)
-        .withPosition(0, 3)
+        .withPosition(1, 1)
         .withSize(2, 1)
         .getEntry();
     rightRotationsEntry = elevatorTab.add("Right Motor Rotations", 0.0)
-        .withPosition(0, 4)
+        .withPosition(1, 2)
         .withSize(2, 1)
         .getEntry();
 
     maxLeftRotationsEntry = elevatorTab.add("Max Left Motor Rotations", 0.0)
-        .withPosition(0, 5)
+        .withPosition(2, 1)
         .withSize(2, 1)
         .getEntry();
     maxRightRotationsEntry = elevatorTab.add("Max Right Motor Rotations", 0.0)
-        .withPosition(0, 6)
+        .withPosition(2, 2)
         .withSize(2, 1)
         .getEntry();
 
     setPositionEntry = elevatorTab.add("Set Position", 0.0)
-        .withPosition(2, 0)
+        .withPosition(3, 0)
         .withSize(1, 1)
         .getEntry();
         
@@ -136,8 +143,6 @@ public class Elevator extends SubsystemBase {
         .withSize(1, 1)
         .getEntry();
 
-    // Configure PID Controller
-    pidController.setTolerance(0.05); 
 
     // Add voltage monitoring widgets
     voltageEntry = elevatorTab.add("Bus Voltage", 0.0)
@@ -163,40 +168,31 @@ public class Elevator extends SubsystemBase {
     // Create soft limit config for elevator
     SoftLimitConfig softLimitConfig = new SoftLimitConfig();
     softLimitConfig
-        .forwardSoftLimit(165)     // Adjust these limits for your elevator!
+        .forwardSoftLimit(169)     // in rotations
         .forwardSoftLimitEnabled(softLimit)
-        .reverseSoftLimit(0.0)     // Bottom position
+        .reverseSoftLimit(0.0)     
         .reverseSoftLimitEnabled(softLimit);
     
     neoConfig
-        .smartCurrentLimit(40)
+        .smartCurrentLimit(30)
         .idleMode(IdleMode.kBrake)  // Use brake mode for elevator
         .voltageCompensation(12.0)
         .openLoopRampRate(0.1)
-        .apply(softLimitConfig)
-        .inverted(inverted)
-        .disableFollowerMode();
+        .apply(softLimitConfig);
+        // .inverted(inverted)
+        // .disableFollowerMode();
 
     // Add follow configuration for right motor
-    // if (motor == rightMotor) {
-    //     neoConfig.follow(leftMotor);
-    // }
+    if (motor == rightMotor) {
+        neoConfig.follow(leftMotor, true);
+    }
     
     motor.setCANTimeout(250);
     motor.configure(neoConfig, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
     motor.getEncoder().setPosition(0.0);  // Reset encoder to zero
   }
 
-  private void configureCANcoder(CANcoder canCoder) {
-    CANcoderConfiguration config = new CANcoderConfiguration();
-    
-    // Configure the sensor
-    config.MagnetSensor.SensorDirection = SensorDirectionValue.CounterClockwise_Positive; 
-    
-    // Apply configuration
-    canCoder.getConfigurator().apply(config);
-    canCoder.setPosition(0.0);
-  }
+ 
 
   /** 
    * Sets the elevator speed. Positive values move up, negative values move down.
@@ -204,7 +200,6 @@ public class Elevator extends SubsystemBase {
    * @param speed Speed from -1.0 to 1.0
    */
   public void setElevatorSpeed(double speed) {
-    // Add gravity feedforward when moving up
     double gravityCompensation = kG;
     
     // Reduce speed when moving down
@@ -240,6 +235,7 @@ public class Elevator extends SubsystemBase {
     public void setPosition(double position) {
     targetPosition = position;
     pidController.setGoal(position);
+    // setElevatorSpeed(pidController.calculate(leftMotor.getEncoder().getPosition()));
   }
 
   public void disablePositionControl() {
@@ -261,10 +257,11 @@ public class Elevator extends SubsystemBase {
     // }
 
     // Handle position control
-    // if (goToPositionButton.getBoolean(false)) {
-    //   setPosition(setPositionEntry.getDouble(0.0));
-    // }
-    
+    if (goToPositionButton.getBoolean(false)) {
+      // setPosition(setPositionEntry.getDouble(0.0));
+      setPosition(20);
+    }
+    SmartDashboard.putNumber("elevator pid", MathUtil.clamp(pidController.calculate(leftMotor.getEncoder().getPosition()),-0.3,0.3));
     // if (positionControl) {
     //   setPosition(setPositionEntry.getDouble(0.0));
     // } else {
