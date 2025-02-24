@@ -17,6 +17,7 @@ import edu.wpi.first.networktables.GenericEntry;
 import java.util.Map;
 
 import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.math.controller.ArmFeedforward;
 import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
@@ -29,6 +30,7 @@ public class Grabber extends SubsystemBase {
     private final SparkMax leftangle;
     private final CANcoder grabberEncoder;
     private static final double DEFAULT_KG = 0.00;
+    private static final double cancderoffset = 0.2;
     private int startupCounter = 0;
     private int stallCounter = 0;
 
@@ -53,14 +55,21 @@ public class Grabber extends SubsystemBase {
             0.1,   // Max velocity in rotations per second
             0.15    // Max acceleration in rotations per second squared
         );
-
+    
+    private final ArmFeedforward grabberFF = 
+    new ArmFeedforward(
+        0.01, 
+        0.01, 
+        0
+    );
+    
     private final DigitalInput intakeLimitSwitch;
 
     public Grabber() {
         rightIntake = new SparkMax(28, MotorType.kBrushless);
         leftIntake = new SparkMax(29, MotorType.kBrushless);
-        leftangle = new SparkMax(30, MotorType.kBrushless);
-        rightangle = new SparkMax(31, MotorType.kBrushless);
+        leftangle = new SparkMax(35, MotorType.kBrushless);
+        rightangle = new SparkMax(36, MotorType.kBrushless);
         grabberEncoder = new CANcoder(27, "rio");
 
         // Initialize all Shuffleboard widgets
@@ -138,6 +147,9 @@ public class Grabber extends SubsystemBase {
             0.005,    // kD
             constraints  // Motion constraints
         );
+
+
+
         pidController.reset(grabberEncoder.getAbsolutePosition().getValueAsDouble());
         pidController.setTolerance(0.0004);  // Degrees of acceptable error
         pidController.setIZone(0.05);  
@@ -292,11 +304,18 @@ public class Grabber extends SubsystemBase {
      * @param output Target voltage percentage 
      */
     public void set(double output) {
-        // double baseKG = DEFAULT_KG;
         double currentAngle = grabberEncoder.getAbsolutePosition().getValueAsDouble();
-        double kG = calculateKG(currentAngle);
-        // double kG = (currentAngle <= 0) ? -baseKG * 12.0 : baseKG * 12.0;
-        leftangle.setVoltage((MathUtil.clamp(output, -1, 1) * 12) + kG);
+        
+        // Convert position to radians for ArmFeedforward
+        double positionRadians = (currentAngle - cancderoffset) * Math.PI * 2;  // Adjust scaling as needed
+        
+        // Calculate feedforward voltage
+        double ffVolts = grabberFF.calculate(positionRadians, output);
+        
+        // Combine feedforward with commanded output
+        double totalVoltage = (MathUtil.clamp(output + ffVolts, -1, 1) * 12.0);
+        
+        leftangle.setVoltage(totalVoltage);
     }
 
     public double calculateKG(double position) {
