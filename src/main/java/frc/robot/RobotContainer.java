@@ -6,6 +6,7 @@ package frc.robot;
 
 import frc.robot.Constants.OperatorConstants;
 import frc.robot.subsystems.superstructure.Grabber;
+import frc.robot.subsystems.superstructure.Intake;
 import frc.robot.subsystems.superstructure.Elevator;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
@@ -25,6 +26,7 @@ public class RobotContainer {
   // Declare subsystem
   private final Elevator m_elevatorSubsystem = new Elevator();
   private final Grabber m_Coral= new Grabber();
+  private final Intake m_Intake = new Intake();
 
   // Replace with CommandPS4Controller or CommandJoystick if needed
   private final CommandXboxController m_driverController =

@@ -12,6 +12,7 @@ import com.ctre.phoenix6.controls.MotionMagicDutyCycle;
 import com.ctre.phoenix6.controls.compound.Diff_MotionMagicDutyCycle_Velocity;
 import com.ctre.phoenix6.hardware.CANcoder;
 import com.ctre.phoenix6.hardware.TalonFX;
+import com.ctre.phoenix6.signals.NeutralModeValue;
 import com.ctre.phoenix6.signals.SensorDirectionValue;
 import com.revrobotics.spark.SparkBase.PersistMode;
 import com.revrobotics.spark.SparkBase.ResetMode;
@@ -21,6 +22,7 @@ import com.revrobotics.spark.config.SparkBaseConfig.IdleMode;
 import com.revrobotics.spark.config.SparkMaxConfig;
 
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.controller.ArmFeedforward;
 import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
@@ -28,6 +30,7 @@ import edu.wpi.first.networktables.GenericEntry;
 import edu.wpi.first.wpilibj.shuffleboard.BuiltInWidgets;
 import edu.wpi.first.wpilibj.shuffleboard.Shuffleboard;
 import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 import java.util.Map;
 
@@ -43,23 +46,23 @@ public class Intake extends SubsystemBase {
 
   private final TrapezoidProfile.Constraints constraints =
   new TrapezoidProfile.Constraints(
-    0.3,
+    0.4,
     1
   );
 
   private final ProfiledPIDController pidController =
   new ProfiledPIDController(
-    0.01,
+    2.5,
     0.0,
-    0.0,
+    0.1,
     constraints
   );
 
   private final ArmFeedforward intakeFF =
   new ArmFeedforward(
     0.01,
-    0.0,
-    0.0
+    0.56,
+    0.62
   );
 
   private final DynamicMotionMagicVoltage magic =
@@ -72,7 +75,7 @@ public class Intake extends SubsystemBase {
 
 
   // Add with other instance variables
-  private final ShuffleboardTab intakeTab = Shuffleboard.getTab("Intake");
+  private final ShuffleboardTab intakeTab;
   
   // Control buttons
   private final GenericEntry intakeInButton, intakeOutButton, intakeStopButton;
@@ -83,16 +86,20 @@ public class Intake extends SubsystemBase {
   private final GenericEntry motorCurrentDisplay;
   
   // Angle control buttons
-  private final GenericEntry angleUpButton, angleDownButton;
+  private final GenericEntry angleUpButton, angleDownButton, setanglebutton;
   private final GenericEntry angleSpeedSlider;
   private final GenericEntry anglePositionDisplay;
   
   /** Creates a new Intake. */
   public Intake() {
-    leftAngle = new TalonFX(37);
-    rightAngle = new TalonFX(38);
-    angleEncoder = new CANcoder(39);
-    intakeMotor = new SparkMax(35, MotorType.kBrushless);
+    // Create the tab first, before any other initialization
+    intakeTab = Shuffleboard.getTab("Intake");
+    
+    // Then initialize motors
+    leftAngle = new TalonFX(17, "GTX7130");
+    rightAngle = new TalonFX(18, "GTX7130");
+    angleEncoder = new CANcoder(4, "rio");
+    intakeMotor = new SparkMax(45, MotorType.kBrushless);
 
     // Configure TalonFX motors
     TalonFXConfiguration angleConfig = new TalonFXConfiguration();
@@ -100,6 +107,7 @@ public class Intake extends SubsystemBase {
     angleConfig.Voltage.PeakReverseVoltage = -12.0;
     angleConfig.CurrentLimits.SupplyCurrentLimit = 40;
     angleConfig.CurrentLimits.SupplyCurrentLimitEnable = true;
+    
 
     var slot0config = angleConfig.Slot0;
     slot0config.kP = 0.1;
@@ -113,11 +121,15 @@ public class Intake extends SubsystemBase {
     leftAngle.getConfigurator().apply(angleConfig);
     rightAngle.getConfigurator().apply(angleConfig);
 
+    leftAngle.setNeutralMode(NeutralModeValue.Brake);
+    rightAngle.setNeutralMode(NeutralModeValue.Brake);
+
     rightAngle.setControl(new Follower(37, true));
     
     // Configure CANcoder
     CANcoderConfiguration encoderConfig = new CANcoderConfiguration();
     encoderConfig.MagnetSensor.SensorDirection = SensorDirectionValue.CounterClockwise_Positive;
+    encoderConfig.MagnetSensor.AbsoluteSensorDiscontinuityPoint = 1;
     angleEncoder.getConfigurator().apply(encoderConfig);
 
     // Configure SparkMax
@@ -133,6 +145,11 @@ public class Intake extends SubsystemBase {
     // Apply our configuration with proper timeout
     intakeMotor.setCANTimeout(250);
     intakeMotor.configure(neo550Config, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
+
+    pidController.disableContinuousInput();
+    pidController.setIntegratorRange(0,0);
+    pidController.setGoal(angleEncoder.getAbsolutePosition().getValueAsDouble());
+    pidController.calculate(angleEncoder.getAbsolutePosition().getValueAsDouble());
 
     // Initialize control buttons
     intakeInButton = intakeTab.add("Intake In", false)
@@ -186,6 +203,13 @@ public class Intake extends SubsystemBase {
         .withPosition(1, 3)
         .withSize(1, 1)
         .getEntry();
+    
+            
+    setanglebutton = intakeTab.add("Angle set cs", false)
+    .withWidget(BuiltInWidgets.kToggleButton)
+    .withPosition(3, 2)
+    .withSize(1, 1)
+    .getEntry();
         
     // Angle speed control
     angleSpeedSlider = intakeTab.add("Angle Speed", 0.3)
@@ -201,19 +225,23 @@ public class Intake extends SubsystemBase {
         .withPosition(2, 3)
         .withSize(1, 1)
         .getEntry();
+
   }
 
   @Override
   public void periodic() {
+    // Add this at the start of periodic to ensure updates
+    Shuffleboard.update();
+    
     // Get current speed setting
     double speed = intakeSpeedSlider.getDouble(0.5);
     
     // Handle button inputs
     if (intakeInButton.getBoolean(false)) {
-        intakeMotor.set(speed);
+        intakeMotor.set(-0.5);
     } else if (intakeOutButton.getBoolean(false)) {
-        intakeMotor.set(-speed);
-    } else if (intakeStopButton.getBoolean(false)) {
+        intakeMotor.set(0.3);
+    } else {
         intakeMotor.set(0);
     }
     
@@ -223,19 +251,40 @@ public class Intake extends SubsystemBase {
 
     
     if (angleUpButton.getBoolean(false)) {
-        moveAngle(0.2);
+        moveAngle(-0.12);
     } else if (angleDownButton.getBoolean(false)) {
-        moveAngle(-0.2);
+        moveAngle(0.12);
+    }else if (setanglebutton.getBoolean(false)) {
+        setAngle(0.3679101);
     } else {
         moveAngle(0);  // Stop movement
     }
     
     // Update angle display
     anglePositionDisplay.setDouble(angleEncoder.getAbsolutePosition().getValueAsDouble());
+
+    SmartDashboard.putNumber("intake pid", pidController.calculate(angleEncoder.getAbsolutePosition().getValueAsDouble()));
+    SmartDashboard.putNumber("intake pid setpoint", pidController.getSetpoint().position);
   }
 
   public void moveAngle(double speed) {
-    magic.Velocity = speed;
-    leftAngle.setControl(magic);
+    // magic.Velocity = speed;
+    // leftAngle.setControl(magic);
+    // leftAngle.set(speed + intakeFF.calculate(angleEncoder.getAbsolutePosition().getValueAsDouble(), speed))
+    leftAngle.set(speed);
+  }
+
+  //0.36101cs
+  public void setAngle(double position) {
+    pidController.setGoal(position);
+    double output = pidController.calculate(angleEncoder.getAbsolutePosition().getValueAsDouble());
+    // output += intakeFF.calculate(position, output);
+    leftAngle.set(output);
+  }
+
+  public void setVoltage(double voltagePercent) {
+    double speed = MathUtil.clamp(voltagePercent, -1, 1);
+    double output = (speed * 12) + intakeFF.calculate(angleEncoder.getAbsolutePosition().getValueAsDouble(), speed);
+    leftAngle.setVoltage(output);
   }
 }

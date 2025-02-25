@@ -25,6 +25,7 @@ import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.controller.ArmFeedforward;
 import edu.wpi.first.math.controller.ProfiledPIDController;
+import edu.wpi.first.math.controller.SimpleMotorFeedforward;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
 import com.ctre.phoenix6.configs.CANcoderConfiguration;
 import com.ctre.phoenix6.signals.SensorDirectionValue;
@@ -68,22 +69,23 @@ public class Elevator extends SubsystemBase {
   // Profiled PID Controller for smooth motionS
   private final TrapezoidProfile.Constraints constraints = 
       new TrapezoidProfile.Constraints(
-          0.3,   
-          0.75  
+          20,   
+          30
       );
   
   private final ProfiledPIDController pidController = 
       new ProfiledPIDController(
           0.05,   // P gain
           0.0,   // I gain
-          0.2,   // D gain
+          0.0,   // D gain
           constraints
       );
   
+  private final SimpleMotorFeedforward feedforward = new SimpleMotorFeedforward(0.36, 3.07, 0.04);
 
   private double targetPosition = 0.0;
   private final GenericEntry setPositionEntry;
-  private final GenericEntry goToPositionButton;
+  private final GenericEntry goTol2Button, goTol3Button, goTol4Button, goTogroundButton;
   private boolean positionControl = false;
 
   // Add these with other instance variables
@@ -101,9 +103,14 @@ public class Elevator extends SubsystemBase {
     configureNEO(rightMotor, true,true);  //slave cw positive
     
     
+
     // Configure PID Controller
-    pidController.setTolerance(0.05); 
-    pidController.setIntegratorRange(0, 0); //disables integral windup for testing
+    pidController.setTolerance(0.1); 
+    pidController.setIZone(Double.POSITIVE_INFINITY);
+    pidController.setIntegratorRange(-5, 5);
+    pidController.setGoal(leftMotor.getEncoder().getPosition());
+    pidController.calculate(leftMotor.getEncoder().getPosition());
+    pidController.reset(leftMotor.getEncoder().getPosition());
 
     //widgets
     speedEntry = elevatorTab.add("Elevator Speed", 0.0)
@@ -137,13 +144,28 @@ public class Elevator extends SubsystemBase {
         .withSize(1, 1)
         .getEntry();
         
-    goToPositionButton = elevatorTab.add("Go To Position", false)
+    goTol2Button = elevatorTab.add("Go To L2", false)
+        .withWidget("Toggle Button")
+        .withPosition(3, 0)
+        .withSize(1, 1)
+        .getEntry();
+    goTol3Button = elevatorTab.add("Go To L3", false)
+        .withWidget("Toggle Button")
+        .withPosition(3, 1)
+        .withSize(1, 1)
+        .getEntry();
+
+    goTol4Button = elevatorTab.add("Go To L4", false)
         .withWidget("Toggle Button")
         .withPosition(3, 0)
         .withSize(1, 1)
         .getEntry();
 
-
+    goTogroundButton = elevatorTab.add("Go To ground", false)
+        .withWidget("Toggle Button")
+        .withPosition(3, 0)
+        .withSize(1, 1)
+        .getEntry();
     // Add voltage monitoring widgets
     voltageEntry = elevatorTab.add("Bus Voltage", 0.0)
         .withPosition(0, 7)
@@ -211,19 +233,19 @@ public class Elevator extends SubsystemBase {
     rightMotor.set(speed + gravityCompensation);
   }
 
-  /**
-   * Move the elevator up at a fixed speed
-   */
-  public void up() {
-    setElevatorSpeed(0.2);  // Adjust this value based on your needs!
+  public void setVoltage(double voltagePercent) {
+    double speed = MathUtil.clamp(voltagePercent, -1, 1);
+    double ff = feedforward.calculate(speed);
+    double output = (speed * 12) + ff;
+
+    // Reduce speed when moving down
+    if (output < 0) {
+      output *= kDownSpeedMultiplier;
+    }
+    leftMotor.setVoltage(output);
   }
 
-  /**
-   * Move the elevator down at a fixed speed
-   */
-  public void down() {
-    setElevatorSpeed(-0.2);  // Adjust this value based on your needs!
-  }
+  
 
   /**
    * Stop the elevator
@@ -234,8 +256,8 @@ public class Elevator extends SubsystemBase {
 
     public void setPosition(double position) {
     targetPosition = position;
-    pidController.setGoal(position);
-    // setElevatorSpeed(pidController.calculate(leftMotor.getEncoder().getPosition()));
+    pidController.setGoal(targetPosition);
+    setVoltage(MathUtil.clamp(pidController.calculate(leftMotor.getEncoder().getPosition()), -0.3, 0.3));
   }
 
   public void disablePositionControl() {
@@ -257,19 +279,23 @@ public class Elevator extends SubsystemBase {
     // }
 
     // Handle position control
-    if (goToPositionButton.getBoolean(false)) {
-      // setPosition(setPositionEntry.getDouble(0.0));
-      setPosition(20);
-    }
-    SmartDashboard.putNumber("elevator pid", MathUtil.clamp(pidController.calculate(leftMotor.getEncoder().getPosition()),-0.3,0.3));
-    // if (positionControl) {
-    //   setPosition(setPositionEntry.getDouble(0.0));
-    // } else {
-      // Normal button control
+    
+    SmartDashboard.putNumber("elevator pid", MathUtil.clamp(pidController.calculate(leftMotor.getEncoder().getPosition()),-0.4,0.4));
+    SmartDashboard.putNumber("elevator pid setpoint", pidController.getSetpoint().position);
+    SmartDashboard.putNumber("elevator ff", feedforward.calculate(0.3));
+    
       if (upButton.getBoolean(false)) {
-        up();
+        setVoltage(0.2);
       } else if (downButton.getBoolean(false)) {
-        down();
+        setVoltage(-0.2);
+      } else if (goTol2Button.getBoolean(false)) {
+        setPosition(17.5);
+      } else if (goTol3Button.getBoolean(false)) {
+        setPosition(63.54888916015625);
+      } else if (goTol4Button.getBoolean(false)) {
+        setPosition(159);
+      } else if (goTogroundButton.getBoolean(false)) {
+        setPosition(-0.2);
       } else {
         stop();
       }

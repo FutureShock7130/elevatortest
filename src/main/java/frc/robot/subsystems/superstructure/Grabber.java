@@ -36,12 +36,11 @@ public class Grabber extends SubsystemBase {
 
     // Shuffleboard entries
     private final ShuffleboardTab grabberTab = Shuffleboard.getTab("Grabber");
-    private final GenericEntry upButton, downButton, upSpeed, downSpeed;
     private final GenericEntry forwardButton, backwardButton;
     private final GenericEntry angleDisplay;
     private final GenericEntry bothInButton, bothOutButton;
     private final GenericEntry upRPMStatus, downRPMStatus;
-    private final GenericEntry defaultButton, coralStationButton, reefButton;
+    private final GenericEntry defaultButton, coralStationButton, l4Button, l23Button;
 
     // private final ShuffleboardTab motorTab = Shuffleboard.getTab("Motor Controls");
 
@@ -72,29 +71,9 @@ public class Grabber extends SubsystemBase {
         rightangle = new SparkMax(36, MotorType.kBrushless);
         grabberEncoder = new CANcoder(27, "rio");
 
+        intakeLimitSwitch = new DigitalInput(9);
+
         // Initialize all Shuffleboard widgets
-        upButton = grabberTab.add("Up Motor", false)
-            .withWidget("Toggle Button")
-            .withPosition(0, 0)
-            .getEntry();
-
-        downButton = grabberTab.add("Down Motor", false)
-            .withWidget("Toggle Button")
-            .withPosition(0, 1)
-            .getEntry();
-
-        upSpeed = grabberTab.add("Up Motor Speed", 0.5)
-            .withWidget("Number Slider")
-            .withProperties(Map.of("min", -1.0, "max", 1.0))
-            .withPosition(1, 0)
-            .getEntry();
-
-        downSpeed = grabberTab.add("Down Motor Speed", 0.5)
-            .withWidget("Number Slider")
-            .withProperties(Map.of("min", -1.0, "max", 1.0))
-            .withPosition(1, 1)
-            .getEntry();
-
         forwardButton = grabberTab.add("Turn Forward", false)
             .withWidget("Toggle Button")
             .withPosition(0, 4)
@@ -154,6 +133,9 @@ public class Grabber extends SubsystemBase {
         pidController.setTolerance(0.0004);  // Degrees of acceptable error
         pidController.setIZone(0.05);  
         pidController.disableContinuousInput();
+        pidController.setIntegratorRange(0,0);
+        pidController.setGoal(grabberEncoder.getAbsolutePosition().getValueAsDouble());
+        pidController.calculate(grabberEncoder.getAbsolutePosition().getValueAsDouble());
         // Add position preset buttons
         defaultButton = grabberTab.add("default", false)
             .withWidget("Toggle Button")
@@ -161,7 +143,7 @@ public class Grabber extends SubsystemBase {
             .withSize(1, 1)
             .getEntry();
             
-        reefButton = grabberTab.add("reef", false)
+        l4Button = grabberTab.add("l4", false)
             .withWidget("Toggle Button")
             .withPosition(1, 7)
             .withSize(1, 1)
@@ -172,6 +154,12 @@ public class Grabber extends SubsystemBase {
             .withPosition(2, 7)
             .withSize(1, 1)
             .getEntry();
+        
+        l23Button = grabberTab.add("l23", false)
+            .withWidget("Toggle Button")
+            .withPosition(3, 3)
+            .withSize(1, 1)
+            .getEntry();
 
         configureNEO550(rightIntake);
         configureNEO550(leftIntake);
@@ -180,7 +168,7 @@ public class Grabber extends SubsystemBase {
         // Configure follower
         SparkMaxConfig followerConfig = new SparkMaxConfig();
         followerConfig
-            .smartCurrentLimit(40)
+            .smartCurrentLimit(30)
             .idleMode(IdleMode.kBrake)
             .voltageCompensation(12.0)
             .follow(leftangle, true);  // Set to follow leftangle
@@ -190,8 +178,6 @@ public class Grabber extends SubsystemBase {
         
         leftangle.getEncoder().setPosition(0.0);
 
-        // Initialize limit switch on DIO port 0 (change port as needed!)
-        intakeLimitSwitch = new DigitalInput(0);
     }
 
     @Override
@@ -204,11 +190,13 @@ public class Grabber extends SubsystemBase {
     
         // Check position buttons
         if (defaultButton.getBoolean(false)) {
-            setPosition(0.0);  // Default position
-        } else if (reefButton.getBoolean(false)) {
-            setPosition(-0.1884);  // Reef position
+            setPosition(-0.0432);  // Default position
+        } else if (l4Button.getBoolean(false)) {
+            setPosition(-0.1284);  // l4 pos  l2 l3 is -0.1884
         } else if (coralStationButton.getBoolean(false)) {
-            setPosition(0.233689453125);  // Coral station position
+            setPosition(0.21630859375);  // Coral station position
+        }else if (l23Button.getBoolean(false)) {
+            setPosition(-0.1884);
         }else if (forwardButton.getBoolean(false)) {
             set(0.069);
         } else if (backwardButton.getBoolean(false)) {
@@ -225,21 +213,15 @@ public class Grabber extends SubsystemBase {
         // Update angle display
         angleDisplay.setDouble(currentAngle);
 
-        // Get button states and speeds fow motow contwol OwO
-        boolean upButtonState = upButton.getBoolean(false);
-        boolean downButtonState = downButton.getBoolean(false);
-        
-        double upSpeedValue = upSpeed.getDouble(0.5);
-        double downSpeedValue = downSpeed.getDouble(0.5);
-        
-        rightIntake.set(upButtonState ? upSpeedValue : 0);
-        leftIntake.set(downButtonState ? downSpeedValue : 0);
 
         // Handle synchronized motor control
             if (bothInButton.getBoolean(false)) {
-                intake(0.3);
+                intake();
         } else if (bothOutButton.getBoolean(false)) {
-            placeCoral(0.3);
+            placeCoral();
+        } else {
+            leftIntake.set(0);
+            rightIntake.set(0);
         }
 
         // Check RPM and update status
@@ -247,6 +229,7 @@ public class Grabber extends SubsystemBase {
         double leftIntakeRPM = Math.abs(leftIntake.getEncoder().getVelocity());
         
         SmartDashboard.putNumber("pid", pidController.calculate(grabberEncoder.getAbsolutePosition().getValueAsDouble()));
+        SmartDashboard.putBoolean("limit switch", intakeLimitSwitch.get());
     }
 
     // Copy your configuration methods
@@ -254,7 +237,7 @@ public class Grabber extends SubsystemBase {
         SparkMaxConfig neo550Config = new SparkMaxConfig();
     
         neo550Config
-            .smartCurrentLimit(20)  
+            .smartCurrentLimit(30)  
             .idleMode(IdleMode.kCoast)  
             .voltageCompensation(12.0)  
             .openLoopRampRate(0.1);     
@@ -337,23 +320,23 @@ public class Grabber extends SubsystemBase {
         return grabberEncoder.getAbsolutePosition().getValueAsDouble();
     }
 
-    public void intake(double speed) {
-        if (intakeLimitSwitch.get()) {
+    public void intake() {
+        if (!intakeLimitSwitch.get()) {
             rightIntake.set(0);
             leftIntake.set(0);
-            return;
+            
+        }else{
+        rightIntake.set(-0.4);
+        leftIntake.set(0.4);
         }
-        
-        rightIntake.set(speed);
-        leftIntake.set(-speed);
     }
 
     public boolean isIntakeStopped() {
         return intakeLimitSwitch.get();
     }
 
-    public void placeCoral(double speed) {
-        rightIntake.set(-speed);
-        leftIntake.set(speed);
+    public void placeCoral() {
+        rightIntake.set(0.2);
+        leftIntake.set(-0.2);
     }
 } 
